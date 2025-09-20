@@ -1,0 +1,11 @@
+[
+{
+"entry_id": "JE1001",
+"date": "2025-05-31",
+"lines": [
+{ "account_id": "1000", "debit": 500, "credit": 0 },
+{ "account_id": "2000", "debit": 0, "credit": 500 }
+],
+"description": "Vendor payment"
+}
+]

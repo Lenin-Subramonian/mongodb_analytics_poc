@@ -1,0 +1,4 @@
+[
+{ "task_id": "T1", "name": "Reconcile Cash", "assigned_to": "Alice", "status": "Complete", "due_date": "2025-06-05" },
+{ "task_id": "T2", "name": "Review AP", "assigned_to": "Bob", "status": "In Progress", "due_date": "2025-06-06" }
+]

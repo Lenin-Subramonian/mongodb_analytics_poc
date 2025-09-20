@@ -1,0 +1,63 @@
+# scripts/setup_windows_hadoop.py
+import requests
+import os
+from pathlib import Path
+
+def setup_windows_hadoop():
+    """Download and setup Windows Hadoop utilities for Spark"""
+    
+    spark_home = os.getenv('SPARK_HOME')
+    if not spark_home:
+        print("❌ SPARK_HOME not set. Please set it first.")
+        return
+    
+    bin_dir = Path(spark_home) / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    
+    files_to_download = [
+        {
+            "name": "winutils.exe",
+            "url": "https://github.com/steveloughran/winutils/raw/master/hadoop-3.3.1/bin/winutils.exe"
+        },
+        {
+            "name": "hadoop.dll", 
+            "url": "https://github.com/steveloughran/winutils/raw/master/hadoop-3.3.1/bin/hadoop.dll"
+        }
+    ]
+    
+    for file_info in files_to_download:
+        file_path = bin_dir / file_info["name"]
+        
+        if file_path.exists():
+            print(f"✓ {file_info['name']} already exists")
+            continue
+            
+        print(f"Downloading {file_info['name']}...")
+        
+        try:
+            response = requests.get(file_info["url"])
+            response.raise_for_status()
+            
+            with open(file_path, 'wb') as f:
+                f.write(response.content)
+                
+            print(f"✓ Downloaded {file_info['name']}")
+            
+        except Exception as e:
+            print(f"❌ Failed to download {file_info['name']}: {e}")
+    
+    # Set permissions (if possible)
+    try:
+        import stat
+        for file_info in files_to_download:
+            file_path = bin_dir / file_info["name"]
+            if file_path.exists():
+                file_path.chmod(stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+    except:
+        pass  # Permissions setting might fail on Windows
+    
+    print(f"✅ Windows Hadoop utilities setup complete!")
+    print(f"Files located in: {bin_dir}")
+
+if __name__ == "__main__":
+    setup_windows_hadoop()

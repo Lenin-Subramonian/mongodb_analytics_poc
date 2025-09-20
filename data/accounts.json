@@ -1,0 +1,4 @@
+[
+{ "account_id": "1000", "name": "Cash", "type": "Asset" },
+{ "account_id": "2000", "name": "Accounts Payable", "type": "Liability" }
+]

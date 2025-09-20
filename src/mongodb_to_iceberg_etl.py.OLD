@@ -1,0 +1,226 @@
+# src/mongodb_to_iceberg_etl.py - Dockerized ETL pipeline
+import os
+import sys
+import logging
+from pathlib import Path
+from datetime import datetime
+
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import *
+from pyspark.sql.types import *
+from pymongo import MongoClient
+import json
+
+from config import config
+
+# Setup logging
+logging.basicConfig(
+    level=getattr(logging, config.LOG_LEVEL),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('/app/logs/etl_pipeline.log'),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
+
+class DockerizedMongoToIcebergETL:
+    """Dockerized MongoDB to Iceberg ETL Pipeline"""
+    
+    def __init__(self):
+        logger.info("Initializing Dockerized MongoDB to Iceberg ETL")
+        config.validate()
+        self.spark = self._create_spark_session()
+        
+    def _create_spark_session(self):
+        """Create Spark session optimized for Docker environment"""
+        
+        # Find JAR files in container
+        jars_dir = Path("/app/jars")
+        jar_files = list(jars_dir.glob("*.jar"))
+        jars_path = ",".join([str(jar) for jar in jar_files])
+        
+        logger.info(f"Loading JAR files: {len(jar_files)} files found")
+        
+        spark = SparkSession.builder \
+            .appName("MongoDB-to-Iceberg-ETL-Docker") \
+            .master("local[*]") \
+            .config("spark.jars", jars_path) \
+            .config("spark.driver.memory", config.SPARK_DRIVER_MEMORY) \
+            .config("spark.executor.memory", config.SPARK_EXECUTOR_MEMORY) \
+            .config("spark.executor.cores", config.SPARK_EXECUTOR_CORES) \
+            .config("spark.sql.extensions", 
+                   "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions") \
+            .config("spark.sql.catalog.iceberg", "org.apache.iceberg.spark.SparkCatalog") \
+            .config("spark.sql.catalog.iceberg.type", "hadoop") \
+            .config("spark.sql.catalog.iceberg.warehouse", config.s3_warehouse_path) \
+            .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
+            .config("spark.hadoop.fs.s3a.access.key", config.AWS_ACCESS_KEY_ID) \
+            .config("spark.hadoop.fs.s3a.secret.key", config.AWS_SECRET_ACCESS_KEY) \
+            .config("spark.hadoop.fs.s3a.endpoint", f"s3.{config.AWS_DEFAULT_REGION}.amazonaws.com") \
+            .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer") \
+            .config("spark.sql.adaptive.enabled", "true") \
+            .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
+            .config("spark.sql.warehouse.dir", "/app/data/spark-warehouse") \
+            .getOrCreate()
+        
+        spark.sparkContext.setLogLevel("WARN")
+        logger.info(f"Spark {spark.version} session created successfully")
+        
+        return spark
+    
+    def extract_from_mongodb(self, limit=None):
+        """Extract data from MongoDB Atlas"""
+        logger.info(f"Connecting to MongoDB: {config.MONGODB_DATABASE}.{config.MONGODB_COLLECTION}")
+        
+        client = MongoClient(
+            config.mongodb_uri,
+            serverSelectionTimeoutMS=30000,
+            maxPoolSize=50
+        )
+        
+        try:
+            # Test connection
+            client.admin.command('ping')
+            logger.info("✓ Connected to MongoDB successfully")
+            
+            db = client[config.MONGODB_DATABASE]
+            collection = db[config.MONGODB_COLLECTION]
+            
+            # Get document count
+            total_docs = collection.count_documents({})
+            logger.info(f"Total documents in collection: {total_docs}")
+            
+            # Extract documents
+            query_limit = limit or min(total_docs, config.BATCH_SIZE * 10)
+            logger.info(f"Extracting {query_limit} documents...")
+            
+            cursor = collection.find().limit(query_limit)
+            docs = []
+            
+            for i, doc in enumerate(cursor):
+                processed_doc = self._process_document(doc)
+                docs.append(processed_doc)
+                
+                if (i + 1) % config.BATCH_SIZE == 0:
+                    logger.info(f"Processed {i + 1}/{query_limit} documents")
+            
+            logger.info(f"✓ Extracted {len(docs)} documents")
+            return docs
+            
+        except Exception as e:
+            logger.error(f"MongoDB extraction failed: {e}")
+            raise
+        finally:
+            client.close()
+    
+    def _process_document(self, doc):
+        """Process MongoDB document for Spark compatibility"""
+        processed = {}
+        for key, value in doc.items():
+            if key == '_id':
+                processed['_id'] = str(value)
+            elif isinstance(value, datetime):
+                processed[key] = value.isoformat()
+            elif isinstance(value, dict):
+                processed[key] = json.dumps(value)
+            else:
+                processed[key] = value
+        return processed
+    
+    def transform_and_load(self, docs, table_name="orders_analytics"):
+        """Transform data and load to Iceberg"""
+        logger.info("Starting data transformation...")
+        
+        # Create DataFrame
+        schema = StructType([
+            StructField("_id", StringType(), True),
+            StructField("order_id", StringType(), True),
+            StructField("customer_email", StringType(), True),
+            StructField("product", StringType(), True),
+            StructField("quantity", IntegerType(), True),
+            StructField("price", DoubleType(), True),
+            StructField("order_date", StringType(), True),
+            StructField("status", StringType(), True),
+            StructField("shipping_address", StringType(), True),
+            StructField("metadata", StringType(), True)
+        ])
+        
+        df = self.spark.createDataFrame(docs, schema)
+        
+        # Transformations
+        df = df.withColumn("order_date", to_timestamp(col("order_date")))
+        df = df.withColumn("extraction_timestamp", current_timestamp())
+        
+        # Parse nested fields
+        df = df.withColumn("shipping_city", 
+                          get_json_object(col("shipping_address"), "$.city"))
+        df = df.withColumn("shipping_state", 
+                          get_json_object(col("shipping_address"), "$.state"))
+        df = df.withColumn("campaign_id", 
+                          get_json_object(col("metadata"), "$.campaign_id"))
+        
+        # Add derived columns
+        df = df.withColumn("total_amount", col("quantity") * col("price"))
+        df = df.withColumn("order_year", year(col("order_date")))
+        df = df.withColumn("order_month", month(col("order_date")))
+        
+        # Data quality filters
+        df = df.filter(col("quantity") > 0)
+        df = df.filter(col("price") > 0)
+        df = df.filter(col("order_id").isNotNull())
+        
+        logger.info(f"Transformed {df.count()} records")
+        
+        # Write to Iceberg
+        logger.info(f"Writing to Iceberg table: {table_name}")
+        
+        df.writeTo(f"iceberg.{table_name}") \
+          .partitionedBy("order_year", "order_month") \
+          .option("write.format.default", "parquet") \
+          .option("write.parquet.compression-codec", "snappy") \
+          .createOrReplace()
+        
+        logger.info("✓ Data written to Iceberg successfully")
+        
+        return df
+    
+    def run_pipeline(self, limit=None):
+        """Run the complete ETL pipeline"""
+        try:
+            logger.info("🚀 Starting MongoDB to Iceberg ETL Pipeline")
+            
+            # Extract
+            docs = self.extract_from_mongodb(limit=limit)
+            
+            # Transform and Load
+            result_df = self.transform_and_load(docs)
+            
+            # Show summary
+            logger.info("📊 Pipeline Summary:")
+            logger.info(f"Records processed: {result_df.count()}")
+            logger.info(f"S3 Location: {config.s3_warehouse_path}")
+            
+            logger.info("✅ ETL Pipeline completed successfully!")
+            
+            return result_df
+            
+        except Exception as e:
+            logger.error(f"❌ Pipeline failed: {e}")
+            raise
+        finally:
+            if hasattr(self, 'spark'):
+                self.spark.stop()
+
+def main():
+    """Main entry point"""
+    try:
+        etl = DockerizedMongoToIcebergETL()
+        result = etl.run_pipeline(limit=5000)  # Limit for demo
+        
+    except Exception as e:
+        logger.error(f"Application failed: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
