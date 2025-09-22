@@ -1,0 +1,133 @@
+# docker-compose.yml - Multi-service orchestration
+# version: '3.8'
+
+services:
+  # Main ETL Application
+  mongodb-etl:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: mongodb-iceberg-etl
+    environment:
+      # Load from .env file
+      - MONGODB_ATLAS_USERNAME=${MONGODB_ATLAS_USERNAME}
+      - MONGODB_ATLAS_PASSWORD=${MONGODB_ATLAS_PASSWORD}
+      - MONGODB_ATLAS_CLUSTER=${MONGODB_ATLAS_CLUSTER}
+      - MONGODB_DATABASE=${MONGODB_DATABASE}
+      - MONGODB_COLLECTION=${MONGODB_COLLECTION}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
+      - S3_BUCKET=${S3_BUCKET}
+      - LOG_LEVEL=${LOG_LEVEL}
+      - BATCH_SIZE=${BATCH_SIZE}
+      # Iceberg / packages settings (change versions here without rebuilding)
+      - PACKAGES=${PACKAGES:-org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.2,org.apache.hadoop:hadoop-aws:3.3.6,com.amazonaws:aws-java-sdk-bundle:1.12.540,org.mongodb.spark:mongo-spark-connector_2.12:10.3.0}
+      - WAREHOUSE=s3a://${S3_BUCKET:-fq-app-analytics-bucket-1}/iceberg-warehouse/ecommerce_db_raw
+      # s3://fq-app-analytics-bucket-1/iceberg-warehouse/ecommerce_db_raw/
+      # Optional: increase Spark driver/executor mem via env if needed
+      - SPARK_DRIVER_MEMORY=${SPARK_DRIVER_MEMORY:-1g}
+      - SPARK_EXECUTOR_MEMORY=${SPARK_EXECUTOR_MEMORY:-1g}
+    volumes:
+      # Mount source code for development
+      - ./src:/app/src:ro
+      - ./scripts:/app/scripts:ro
+      - ./config:/app/config:ro
+      # Mount data and logs directories
+      - ./data:/app/data
+      - ./logs:/app/logs
+      # Mount notebooks for Jupyter
+      - ./notebooks:/app/notebooks
+      # Cache Maven / Ivy artifacts between runs to avoid re-downloading
+      # USE named docker volumes (not host binds) to avoid Windows permission problems:
+      - ivy2-cache:/home/spark/.ivy2
+      - m2-cache:/home/spark/.m2
+    ports:
+      - "4040:4040"  # Spark UI
+      - "4041:4041"  # Spark History Server
+    networks:
+      - analytics-network
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import pyspark; print('OK')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    entrypoint: ["/entrypoint.sh"]
+    # Override default cmd to run spark-submit with --packages
+    # Uses PACKAGES and WAREHOUSE env vars above
+    # command: >
+    # #   bash -lc "
+    # #   set -euo pipefail;
+    # #   # Wait for dependent services (optional sleep for simple scenarios)
+    # #   sleep 3;
+    # #   # Print chosen packages (helpful for debug)
+    # #   echo 'Using packages: ' \"$PACKAGES\";
+    # #   /opt/spark/bin/spark-submit \
+    # #     --master local[*] \
+    # #     --conf spark.driver.memory=${SPARK_DRIVER_MEMORY} \
+    # #     --conf spark.executor.memory=${SPARK_EXECUTOR_MEMORY} \
+    # #     --packages ${PACKAGES} \
+    # #     --conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions \
+    # #     --conf spark.sql.catalog.iceberg=org.apache.iceberg.spark.SparkCatalog \
+    # #     --conf spark.sql.catalog.iceberg.type=hadoop \
+    # #     --conf spark.sql.catalog.iceberg.warehouse=${WAREHOUSE} \
+    # #     /app/src/mongodb_to_iceberg_etl.py
+    # #   "
+    # # restart: unless-stopped
+    # chnaging toa single line to avoid avoids any YAML folding/backslash oddities.
+    # command: >
+    #   bash -c "set -euo pipefail; sleep 3;
+    #     echo 'Using packages: ' \"$PACKAGES\"; 
+    #     /opt/spark/bin/spark-submit --master local[*] --conf spark.driver.memory=${SPARK_DRIVER_MEMORY} --conf spark.executor.memory=${SPARK_EXECUTOR_MEMORY} --packages ${PACKAGES} --conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions --conf spark.sql.catalog.iceberg=org.apache.iceberg.spark.SparkCatalog --conf spark.sql.catalog.iceberg.type=hadoop --conf spark.sql.catalog.iceberg.warehouse=${WAREHOUSE} /app/src/mongodb_to_iceberg_etl.py"
+    # restart: unless-stopped
+
+  # Jupyter Lab for Interactive Analysis
+  jupyter:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: mongodb-analytics-jupyter
+    command: >
+      bash -c "mkdir -p /home/spark/.jupyter /home/spark/.local && 
+      chown -R spark:spark /home/spark && 
+      jupyter lab 
+      --ip=0.0.0.0 
+      --port=8888 
+      --no-browser 
+      --allow-root 
+      --NotebookApp.token=${JUPYTER_TOKEN:-analytics123} 
+      --NotebookApp.notebook_dir=/app/notebooks"   
+    
+    user: root
+    environment:
+      - JUPYTER_ENABLE_LAB=yes
+      - JUPYTER_TOKEN=${JUPYTER_TOKEN:-analytics123}
+      - JUPYTER_CONFIG_DIR=/app/.jupyter
+      # Mirror PACKAGES into Jupyter if you'd like interactive sessions to auto-fetch same connectors
+      - PACKAGES=${PACKAGES:-org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.2,org.apache.hadoop:hadoop-aws:3.3.6,com.amazonaws:aws-java-sdk-bundle:1.12.540,org.mongodb.spark:mongo-spark-connector_2.12:10.3.0}
+      - WAREHOUSE=s3a://${S3_BUCKET:-fq-app-analytics-bucket-1}/iceberg-warehouse/ecommerce_db_raw
+    volumes:
+      - ./notebooks:/app/notebooks
+      - ./data:/app/data
+      - ivy2-cache:/home/spark/.ivy2
+      - m2-cache:/home/spark/.m2
+    ports:
+      - "8888:8888"  # Jupyter Lab
+    networks:
+      - analytics-network
+    depends_on:
+      - mongodb-etl
+    restart: unless-stopped
+
+volumes:
+  ivy2-cache:
+  m2-cache:
+  mongodb_data:
+    driver: local
+
+networks:
+  analytics-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

@@ -1,41 +1,23 @@
-# docker/Dockerfile - Main application container
-FROM openjdk:17-jdk-slim
+# docker/Dockerfile - Using official Spark image
+FROM apache/spark:3.5.3-java17-python3
+
+# Switch to root for installation, Only root can install packages & create directories
+USER root
 
 # Maintainer information
 LABEL maintainer="Data Team"
 LABEL description="MongoDB to Iceberg Analytics Pipeline"
 LABEL version="1.0.0"
 
-# Set environment variables
-ENV SPARK_VERSION=3.5.3
-ENV HADOOP_VERSION=3.3
-ENV SPARK_HOME=/opt/spark
-ENV JAVA_HOME=/usr/local/openjdk-17
-ENV PATH=$PATH:$SPARK_HOME/bin:$SPARK_HOME/sbin
-ENV PYTHONPATH=$SPARK_HOME/python:$SPARK_HOME/python/lib/py4j-*.zip
-ENV PYSPARK_PYTHON=python3
-ENV PYSPARK_DRIVER_PYTHON=python3
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    python3 \
-    python3-pip \
-    python3-dev \
+# Install system dependencies, python3, pip, wget, curl, vim
+# wget - downloads JAR files, curl - health check + debugging, vim - only for debugging/editing
+RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     curl \
-    procps \
-    net-tools \
     vim \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create symbolic link for python
-RUN ln -s /usr/bin/python3 /usr/bin/python
-
-# Download and install Apache Spark
-RUN wget -q "https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz" \
-    && tar -xzf spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz \
-    && mv spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION} ${SPARK_HOME} \
-    && rm spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz
+    python3 python3-venv python3-pip ca-certificates \
+    ln -s /usr/bin/python3 /usr/bin/python || true && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Create application directories
 WORKDIR /app
@@ -45,13 +27,16 @@ RUN mkdir -p /app/src /app/config /app/scripts /app/logs /app/data /app/jars
 COPY docker/requirements.txt /app/
 RUN pip3 install --no-cache-dir -r requirements.txt
 
-# Download required JAR files
-COPY scripts/download_jars.py /app/scripts/
-RUN python3 scripts/download_jars.py
+# ensure ivy & m2 directories exist and owned by spark inside image
+# use named Docker volumes (or a container-local path). This prevents permission problems on Windows/WSL.
+RUN mkdir -p /home/spark/.ivy2 /home/spark/.m2 \
+    && chown -R spark:spark /home/spark/.ivy2 /home/spark/.m2
 
-# Copy Spark configuration files
-COPY config/spark-defaults.conf ${SPARK_HOME}/conf/
-COPY config/log4j2.properties ${SPARK_HOME}/conf/
+# Copy entrypoint script into container & make it executable
+COPY docker/entrypoint.sh /entrypoint.sh
+# RUN chmod +x /entrypoint.sh
+# normalize CRLF -> LF and make executable (sed is portable)
+RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
 
 # Copy application source code
 COPY src/ /app/src/
@@ -59,15 +44,16 @@ COPY scripts/ /app/scripts/
 COPY notebooks/ /app/notebooks/
 COPY sql/ /app/sql/
 
-# Set proper permissions
+# Set permissions
 RUN chmod +x /app/scripts/*.py
-RUN chmod +x ${SPARK_HOME}/bin/*
-RUN chmod +x ${SPARK_HOME}/sbin/*
+RUN chown -R spark:spark /app
 
-# Create non-root user for security
-RUN groupadd -r spark && useradd -r -g spark spark
-RUN chown -R spark:spark /app ${SPARK_HOME}
+# Switch back to non-root (spark) for security
+# Build time: Use root to install dependencies, Runtime: Switch to non-root user for security
 USER spark
+
+# Removing ENTRYPOINT from the image prevents every container made from the image automatically running  ETL job
+# ENTRYPOINT ["/entrypoint.sh"]
 
 # Expose ports
 EXPOSE 4040 4041 7077 8080 8081 8888
@@ -77,4 +63,8 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:4040 || exit 1
 
 # Default command
-CMD ["python3", "src/mongodb_to_iceberg_etl.py"]
+# CMD ["python3", "src/mongodb_to_iceberg_etl.py"]
+# Run via spark-submit (no --packages needed, jars already in classpath)
+CMD [ "bash", "-c", "/opt/spark/bin/spark-submit --master local[*] \
+  --conf spark.driver.memory=1g --conf spark.executor.memory=1g \
+  /app/src/mongodb_to_iceberg_etl.py" ]

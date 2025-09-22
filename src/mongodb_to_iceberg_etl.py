@@ -1,11 +1,12 @@
-# mongodb_to_iceberg_etl.py
+
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import *
-from pyspark.sql.types import *
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DoubleType
 from pymongo import MongoClient
 import boto3
 from datetime import datetime
 import json
+
 
 class MongoToIcebergETL:
     def __init__(self, mongo_uri, s3_bucket, aws_region='us-east-2'):
@@ -46,7 +47,9 @@ class MongoToIcebergETL:
         for i in range(0, total_docs, batch_size):
             batch = list(coll.find().skip(i).limit(batch_size))
             all_docs.extend(batch)
-            print(f"Processed {min(i + batch_size, total_docs)}/{total_docs} documents")
+            # print(f"Processed {min(i + batch_size, total_docs)}/{total_docs} documents")
+            processed_count = i + batch_size if i + batch_size < total_docs else total_docs
+            print(f"Processed {processed_count}/{total_docs} documents")
         
         client.close()
         
@@ -127,6 +130,13 @@ class MongoToIcebergETL:
           .option("write.format.default", "parquet") \
           .option("write.parquet.compression-codec", "snappy") \
           .createOrReplace()
+        
+        # With simple Parquet write for testing:
+        # df.coalesce(1) \
+        #   .write \
+        #   .mode("overwrite") \
+        #   .partitionBy("order_year", "order_month") \
+        #   .parquet(f"s3a://{self.s3_bucket}/data/{table_name}")
         
         print(f"Data written to Iceberg table: {table_name}")
     
