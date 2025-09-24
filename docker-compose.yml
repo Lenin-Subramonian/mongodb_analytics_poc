@@ -17,14 +17,17 @@ services:
       - MONGODB_COLLECTION=${MONGODB_COLLECTION}
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
+      - AWS_REGION=${AWS_REGION:-us-east-2}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-${AWS_REGION:-us-east-2}}
       - S3_BUCKET=${S3_BUCKET}
+      - GLUE_CATALOG_NAME=${GLUE_CATALOG_NAME:-iceberg}
       - LOG_LEVEL=${LOG_LEVEL}
       - BATCH_SIZE=${BATCH_SIZE}
       # Iceberg / packages settings (change versions here without rebuilding)
-      - PACKAGES=${PACKAGES:-org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.2,org.apache.hadoop:hadoop-aws:3.3.6,com.amazonaws:aws-java-sdk-bundle:1.12.540,org.mongodb.spark:mongo-spark-connector_2.12:10.3.0}
-      - WAREHOUSE=s3a://${S3_BUCKET:-fq-app-analytics-bucket-1}/iceberg-warehouse/ecommerce_db_raw
-      # s3://fq-app-analytics-bucket-1/iceberg-warehouse/ecommerce_db_raw/
+      # - PACKAGES=${PACKAGES:-org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.2,org.apache.hadoop:hadoop-aws:3.3.6,com.amazonaws:aws-java-sdk-bundle:1.12.540,org.mongodb.spark:mongo-spark-connector_2.12:10.3.0}
+      - PACKAGES=${PACKAGES:-org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.2,org.apache.hadoop:hadoop-aws:3.3.6,software.amazon.awssdk:glue:2.20.137,software.amazon.awssdk:s3:2.20.137,software.amazon.awssdk:sts:2.20.137,software.amazon.awssdk:dynamodb:2.20.137,software.amazon.awssdk:kms:2.20.137,org.mongodb.spark:mongo-spark-connector_2.12:10.3.0}
+      - WAREHOUSE=s3a://${S3_BUCKET:-fq-app-analytics-bucket-1}/iceberg-warehouse/
+      # s3://fq-app-analytics-bucket-1/iceberg-warehouse/fq_app_db_raw/
       # Optional: increase Spark driver/executor mem via env if needed
       - SPARK_DRIVER_MEMORY=${SPARK_DRIVER_MEMORY:-1g}
       - SPARK_EXECUTOR_MEMORY=${SPARK_EXECUTOR_MEMORY:-1g}
@@ -53,33 +56,6 @@ services:
       timeout: 10s
       retries: 3
     entrypoint: ["/entrypoint.sh"]
-    # Override default cmd to run spark-submit with --packages
-    # Uses PACKAGES and WAREHOUSE env vars above
-    # command: >
-    # #   bash -lc "
-    # #   set -euo pipefail;
-    # #   # Wait for dependent services (optional sleep for simple scenarios)
-    # #   sleep 3;
-    # #   # Print chosen packages (helpful for debug)
-    # #   echo 'Using packages: ' \"$PACKAGES\";
-    # #   /opt/spark/bin/spark-submit \
-    # #     --master local[*] \
-    # #     --conf spark.driver.memory=${SPARK_DRIVER_MEMORY} \
-    # #     --conf spark.executor.memory=${SPARK_EXECUTOR_MEMORY} \
-    # #     --packages ${PACKAGES} \
-    # #     --conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions \
-    # #     --conf spark.sql.catalog.iceberg=org.apache.iceberg.spark.SparkCatalog \
-    # #     --conf spark.sql.catalog.iceberg.type=hadoop \
-    # #     --conf spark.sql.catalog.iceberg.warehouse=${WAREHOUSE} \
-    # #     /app/src/mongodb_to_iceberg_etl.py
-    # #   "
-    # # restart: unless-stopped
-    # chnaging toa single line to avoid avoids any YAML folding/backslash oddities.
-    # command: >
-    #   bash -c "set -euo pipefail; sleep 3;
-    #     echo 'Using packages: ' \"$PACKAGES\"; 
-    #     /opt/spark/bin/spark-submit --master local[*] --conf spark.driver.memory=${SPARK_DRIVER_MEMORY} --conf spark.executor.memory=${SPARK_EXECUTOR_MEMORY} --packages ${PACKAGES} --conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions --conf spark.sql.catalog.iceberg=org.apache.iceberg.spark.SparkCatalog --conf spark.sql.catalog.iceberg.type=hadoop --conf spark.sql.catalog.iceberg.warehouse=${WAREHOUSE} /app/src/mongodb_to_iceberg_etl.py"
-    # restart: unless-stopped
 
   # Jupyter Lab for Interactive Analysis
   jupyter:
@@ -104,8 +80,9 @@ services:
       - JUPYTER_TOKEN=${JUPYTER_TOKEN:-analytics123}
       - JUPYTER_CONFIG_DIR=/app/.jupyter
       # Mirror PACKAGES into Jupyter if you'd like interactive sessions to auto-fetch same connectors
-      - PACKAGES=${PACKAGES:-org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.2,org.apache.hadoop:hadoop-aws:3.3.6,com.amazonaws:aws-java-sdk-bundle:1.12.540,org.mongodb.spark:mongo-spark-connector_2.12:10.3.0}
-      - WAREHOUSE=s3a://${S3_BUCKET:-fq-app-analytics-bucket-1}/iceberg-warehouse/ecommerce_db_raw
+      # - PACKAGES=${PACKAGES:-org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.2,org.apache.hadoop:hadoop-aws:3.3.6,com.amazonaws:aws-java-sdk-bundle:1.12.540,org.mongodb.spark:mongo-spark-connector_2.12:10.3.0}
+      - PACKAGES=${PACKAGES:-org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.2,org.apache.hadoop:hadoop-aws:3.3.6,software.amazon.awssdk:glue:2.20.137,software.amazon.awssdk:s3:2.20.137,software.amazon.awssdk:sts:2.20.137,software.amazon.awssdk:dynamodb:2.20.137,software.amazon.awssdk:kms:2.20.137,org.mongodb.spark:mongo-spark-connector_2.12:10.3.0}
+      - WAREHOUSE=s3a://${S3_BUCKET:-fq-app-analytics-bucket-1}/iceberg-warehouse/
     volumes:
       - ./notebooks:/app/notebooks
       - ./data:/app/data
