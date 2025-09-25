@@ -2,104 +2,239 @@
 
 ## Problem Statement
 
-Background:
+**Background:**
+
 You are working for an accounting SaaS platform focused on automating and tracking the month-end close process, journal entries, and account reconciliations. Your team uses MongoDB as the primary data store for accounting records, workflow tasks, and audit trails.
 Objective:
-Build an end-to-end pipeline that:
-1. Extracts accounting data from MongoDB
-2. Writes to S3 in Apache Iceberg format
-3. Transforms it for analytical use
-4. Enables analysis via a query engine
+   Build an end-to-end pipeline that:
+   1. Extracts accounting data from MongoDB
+   2. Writes to S3 in Apache Iceberg format
+   3. Transforms it for analytical use
+   4. Enables analysis via a query engine
 
 ## Highlevel Solution & Approach
 
-# MongoDB to Apache Iceberg POC (AWS Glue / Databricks)
-
-
-
-This proof-of-concept (POC) demonstrates an end-to-end data pipeline that ingests raw data from MongoDB Atlas into Apache Iceberg tables (stored on S3, cataloged with AWS Glue), and builds curated (silver/gold) datasets for downstream analytics.
+This proof-of-concept (POC) demonstrates an end-to-end data pipeline that ingests raw data from MongoDB Atlas into Apache Iceberg tables (stored on S3, cataloged with AWS Glue), and builds a curated (silver/gold) datasets for downstream analytics.
 
 The solution uses PySpark (3.5.3), the Iceberg Spark runtime, and runs inside Docker containers orchestrated with Docker Compose.
 
-🏗️ **Architecture**
+## 🏗️ Architecture
 
+*MongoDB → PySpark ETL → S3 (Apache Iceberg) → Query Engines → Analytics & BI*
 
-**Data Architecture**
-
-## Overview
-
-This proof-of-concept (POC) demonstrates how to build a **data ingestion and analytics pipeline** where:
-
-1. **Source**: Data is extracted from a MongoDB database (`ecommerce_db_raw`) with collections:
-   - `orders`
-   - `customers`
-   - `products`
-2. **Transformation**: Data is ingested into **Apache Iceberg tables** using **PySpark 3.5.3**.
-3. **Storage**: Data is persisted in **Amazon S3** in Iceberg format (Parquet data files + metadata).
-4. **Catalog**: AWS Glue Catalog (or Databricks Unity Catalog in enterprise setup) manages table and schema definitions.
+ **Source**: Data is extracted from a MongoDB Atlas database (`FQ_App`) with collections:
+   - `accounts`
+   - `journal_entries`
+   - `close_tasks`
+ 
+ **Transformation**: Data is ingested into **Apache Iceberg tables** using **PySpark 3.5.3**.
 
 This approach allows for:
+
 - **Separation of concerns**: `raw` vs `curated` layers in the Iceberg warehouse.
 - **Schema evolution**: Iceberg handles column addition/removal.
 - **Time travel queries**: Analyze data at historical snapshots.
 - **Decoupled compute/storage**: Data in S3 is accessible to multiple engines (Spark, Trino, Athena, Databricks).
+- **Data Lakehouse** - a reliable, flexible, and scalable "lakehouse" architecture.
+     - Combining the flexibility of data lakes with the structure and governance capabilities of data warehouses
+     - Using Iceberg, a data lake moves beyond being just a collection of files to a data lakehouse.
+     - the data stored in the lake can be organized, managed, and queried like a traditional database/data warehouse, but with the scalability and cost-effectiveness of a data lake. 
 
- 1. **Data Infrastructure**
-        - Setup databricks runtime as the base image to process data using PySpark, Python and SQL.
-        - Use Jupyter Notebook and Streamlit for visualization.
-        - Python and Java environment
-        - Supervisor for process management
+## Data Architecture
 
-    **AWS Glue Catalog**
+###  **Storage**
+   - Data is persisted in **Amazon S3** in Iceberg format (Parquet data files + metadata).
 
-      Provides a central metadata store.
+     **S3 layout & Iceberg warehouse structure**
+     
+         - Use a single warehouse root per catalog; within it use database (namespace) / table directories:
+         - set spark.sql.catalog.<catalog>.warehouse to s3a://<bucket>/warehouse/'
 
-      Enables external tools (e.g., Athena, Spark SQL, Databricks) to query Iceberg tables.
+         s3://<bucket>/warehouse/
+           ├─ raw/                      # raw immutable landing zone
+           │   ├─ fq_app/
+           │   │   ├─ accounts/         # Iceberg table dir for raw.accounts
+           │   │   ├─ journal_entries/
+           │   │   └─ close_tasks/
+           ├─ curated/                   # processed / analytics-ready tables
+           │   ├─ fq_app/
+           │   │   ├─ close_tasks_silver/
+           │   │   └─ journal_entries_silver/
 
-     **Storage**
+
+### **Catalog**
+     
+  - AWS Glue Catalog to manages table and schema definitions & provides a central metadata store.
+  - The catalog keeps track of the current metadata file for each table. It is the entry point for all queries and operations on an Iceberg table.
+  - Catalogs can be implemented using services like the Hive Metastore, AWS Glue Catalog, Databricks Unity Catalog or cloud-native options.
+  - Enables external tools (e.g., Spark SQL, Databricks or Athena) to query Iceberg tables.
 
 
+         - catalog = logical metastore, warehouse = shared S3 root,
+         - namespaces/databases = raw/curated,
+         - fq_app is either a sub-namespace or part of table name (s3://fq-app-analytics-bucket-1/iceberg-warehouse/raw/fq_app/)
+    
+           **Sample:** 
+            ├── iceberg-warehouse/
+            │   ├── fq_app_db_raw/       (Glue Database/Iceberg Namespace)
+            │   │   ├── accounts/        (Iceberg Table for the orders collection)
+            │   │   │   ├── metadata/    (Iceberg keeps metadata under table dir normally)
+            │   │   │   ├── data/        (Iceberg keeps data under table dir normally)
+         
 
-      **tooling**
+      - **Warehouse root**: `s3://<bucket>/iceberg-warehouse/`
+      - **Raw layer**: `s3://<bucket>/iceberg-warehouse/raw/<app_name>/<collection>`
+      - **Curated layer**: `s3://<bucket>/iceberg-warehouse/curated/<app_name>/<table>`
 
-      **Data Sources & Target**
+**Catalog Naming**:
 
-**Data Procesing**
+- **Catalog name**: `iceberg` (backed by AWS GlueCatalog)
+     - logical catalog name (e.g., iceberg_catalog or glue_catalog)
+- **Namespaces**: Simlar to databases, raw v/s curated or by application, for eg: fq_app_raw
+     - `raw` → direct MongoDB extracts.
+     - `curated` → transformed, analytics-ready datasets.
+- **Tables**: one per collection: orders, customers.
 
+**Query Engine**
+      Query Engine Integration
+
+ **Data Infrastructure**
  
-  2. **Data Ingestion** - Raw Ingestion Layer
-     -  Extracts collections (e.g., accounts, close_tasks, journal_entries) from MongoDB. 
+  - Setup spark 3.5.3 runtime 'apache/spark:3.5.3-java17-python3' as the base image to process data using PySpark, Python and SQL.
+  - Use Jupyter Notebook data analysis
+  - MongoDB Atlas → source database with collections (accounts, close_tasks, journal_entries).
+
+**Data Procesing**: 
+
+  1. **Data Ingestion** - Raw Ingestion Layer
+     
+     -  Extracts collections (e.g., accounts, close_tasks, journal_entries) from MongoDB Atlas 
      -  Writes directly into S3 in Iceberg format (raw namespace).
      -  Schema in this layer matches MongoDB exactly, preserving source fidelity.
+     -  Raw Layer → schema-preserving ingestion into Iceberg (S3 + Glue). Partitioned by ingest_ts.
+
+            **journal_entries**:
+            +------------------------+--------+----------+--------------------------------+--------------+--------------------------+
+            |_id                     |entry_id|date      |lines                           |description   |ingest_ts                 |
+            +------------------------+--------+----------+--------------------------------+--------------+--------------------------+
+            |68ca9aca193e5d257e046f22|JE1001  |2025-05-31|[{1000, 500, 0}, {2000, 0, 500}]|Vendor payment|2025-09-23 16:46:52.534674|
+            +------------------------+--------+----------+--------------------------------+--------------+--------------------------+
+
+            **close_accounts**
+            +------------------------+-------+--------------+-----------+-----------+----------+--------------------------+
+            |_id                     |task_id|name          |assigned_to|status     |due_date  |ingest_ts                 |
+            +------------------------+-------+--------------+-----------+-----------+----------+--------------------------+
+            |68ca9b35193e5d257e046f26|T2     |Review AP     |Bob        |In Progress|2025-06-06|2025-09-23 04:49:08.584766|
+            |68ca9b35193e5d257e046f25|T1     |Reconcile Cash|Alice      |Complete   |2025-06-05|2025-09-23 04:49:08.584766|
+            +------------------------+-------+--------------+-----------+-----------+----------+--------------------------+
+
+  2. **Data Transform** - Curated Layer (Silver / Gold)
+     
+     -   Transforms raw data into analytics-ready datasets
+     -   Uses MERGE INTO for CDC / idempotent updates.
+     -   Partitioned by business keys such as entry_date (year).
+
+     
+     **Silver Layer**
+        → cleaned, deduplicated data with flattened structures and business partitions (e.g., year(entry_date)).
+        → (e.g., date parsing, flattening nested structures).
+
+         **close_tasks_silver**: 
+         +------------------------+-------+--------------+-----------+-----------+----------+--------------------------+
+         |_id                     |task_id|name          |assigned_to|status     |due_date  |ingest_ts                 |
+         +------------------------+-------+--------------+-----------+-----------+----------+--------------------------+
+         |68ca9b35193e5d257e046f25|T1     |Reconcile Cash|Alice      |Complete   |2025-06-05|2025-09-25 17:45:13.052109|
+         |68ca9b35193e5d257e046f26|T2     |Review AP     |Bob        |In Progress|2025-06-06|2025-09-25 17:45:13.052109|
+         +------------------------+-------+--------------+-----------+-----------+----------+--------------------------+
+
+         **journal_entries_silver**: denormalised, joined data between accounts and journal entries
+         +------------------------+--------+----------+--------------+----------+----------------+------------+-----+------+-------------------------+
+         |_id                     |entry_id|entry_date|description   |account_id|account_name    |account_type|debit|credit|ingest_ts                |
+         +------------------------+--------+----------+--------------+----------+----------------+------------+-----+------+-------------------------+
+         |68ca9aca193e5d257e046f22|JE1001  |2025-05-31|Vendor payment|1000      |Cash            |Asset       |500.0|0.0   |2025-09-25 17:45:16.68436|
+         |68ca9aca193e5d257e046f22|JE1001  |2025-05-31|Vendor payment|2000      |Accounts Payable|Liability   |0.0  |500.0 |2025-09-25 17:45:16.68436|
+         +------------------------+--------+----------+--------------+----------+----------------+------------+-----+------+-------------------------+
+
+   **Gold Layer** → aggregated metrics tables for analytics (e.g., debit/credit totals).
+
+         **journal_entries_gold**:
+         +--------+----------+------------+-----------+
+         |entry_id|entry_date|total_credit|total_debit|
+         +--------+----------+------------+-----------+
+         |JE1001  |2025-05-31|500.0       |500.0      |
+         +--------+----------+------------+-----------+
+
+🎯 Performance Optimization
+
+MongoDB Optimization
+
+Create indexes on query fields
+Use projection to limit fields
+Implement connection pooling
+Consider read preferences for replica sets
+
+Spark Optimization
+
+Tune executor memory and cores
+Optimize partition sizes (128MB-1GB)
+Use appropriate file formats (Parquet)
+Enable predicate pushdown
+
+Iceberg Optimization
+
+Choose appropriate partitioning strategy
+Configure file sizes and compaction
+Use columnar formats for analytics
+Implement data compaction schedules
+
+Query Engine Optimization
+
+Trino: Tune memory and worker nodes
+Spark: Optimize join strategies and caching
+Athena: Use partitioning and columnar formats
+General: Implement query result caching
 
 
-  3. **Data Transform** - Curated Layer (Silver / Gold)
+🚀 Deployment Options
 
-      Transforms raw data into analytics-ready datasets:
-      Silver: Deduplicated, cleaned, with schema evolution applied (e.g., date parsing, flattening nested structures).
-      Gold: Aggregated metrics (e.g., journal entry debit/credit totals).
-      Uses MERGE INTO for CDC / idempotent updates.
-      Partitioned by business keys such as entry_date (year).
+📋 Prerequisites
+Software Requirements
 
-  5. **Data Analytics**
-     - Generate datasets for each use case using the above views.
-    
-              -  Test 1: Distribution of Crate Type per Company
-              -  Test 2: DataFrame of Orders with Full Name of the Contact
-              -  Test 3: DataFrame of Orders with Contact Address
-              -  Test 4: Calculation of Sales Team Commissions
-              -  Test 5: DataFrame of Companies with Sales Owners
-              -  Test 6: Data visualization data sets
-      - Render the data visualization using Streamlit
+Python 3.8+
+Apache Spark 3.4+
+MongoDB 4.4+
+AWS CLI configured
+Docker (optional)
+Apache Airflow (for orchestration)
+
+AWS Services
+
+S3 bucket for data storage
+IAM roles with appropriate permissions
+Athena (optional, for serverless querying)
+
+🚀 Features
+
+Scalable Data Extraction: Efficient MongoDB data extraction using PyMongo and PySpark
+Modern Data Lake: Apache Iceberg format with ACID transactions and schema evolution
+Multiple Query Engines: Support for Trino, Spark SQL, Amazon Athena, and Dremio
+Incremental Processing: Delta load capabilities for efficient data updates
+Data Quality: Built-in data validation and quality checks
+Production Ready: Docker containerization and Airflow orchestration
 
   ## Getting Started
   
-      ### Dependencies
-        - Ubuntu 24.04.1 LTS or Ensure WSL 2 (Windows Subsystem for Linux)
-        - Java openjdk-11-jdk and set JAVA_HOME=/usr/lib/jvm/java-1.11.0-openjdk-amd64
-        - Set PYTHONPATH=$(pwd)/src:$PYTHONPATH (to execute the /src files. 
+   ### Dependencies
+  - Ubuntu 24.04.1 LTS or Ensure WSL 2 (Windows Subsystem for Linux)
+  - Java openjdk-11-jdk and set JAVA_HOME=/usr/lib/jvm/java-1.11.0-openjdk-amd64
+  - Set PYTHONPATH=$(pwd)/src:$PYTHONPATH (to execute the /src files.
+### Glue / Iceberg Configuration
+- Use **GlueCatalog** for central schema management.
+- Set `spark.sql.catalog.iceberg.warehouse=s3://<bucket>/iceberg-warehouse/`.
+- Ensure AWS credentials and region are available (via env vars or IAM roles).
+- Include required AWS SDK v2 jars: `s3`, `glue`, `dynamodb`, `kms`.
       
-      **Core dependencies**
+   **Core dependencies**
         pyspark==3.5.3
         pymongo==4.8.0
         boto3==1.34.144
@@ -110,13 +245,13 @@ This approach allows for:
         seaborn==0.13.0
         py4j==0.10.9.7
 
-       # Jupyter dependencies
-        jupyter==1.0.0
-        jupyterlab==4.0.9
-        ipykernel==6.29.0
-        ipywidgets
-        matplotlib==3.8.2
-        plotly==5.17.0
+ # Jupyter dependencies
+  jupyter==1.0.0
+  jupyterlab==4.0.9
+  ipykernel==6.29.0
+  ipywidgets
+  matplotlib==3.8.2
+  plotly==5.17.0
 
   ### 2. Docker Compose
 
@@ -147,30 +282,6 @@ S3_BUCKET=fq-app-analytics-bucket-1
 
 ## Best Practices
 
-### Data Layout
-- **Warehouse root**: `s3://<bucket>/iceberg-warehouse/`
-- **Raw layer**: `s3://<bucket>/iceberg-warehouse/raw/<app_name>/<collection>`
-- **Curated layer**: `s3://<bucket>/iceberg-warehouse/curated/<app_name>/<table>`
-
-This ensures multiple apps can share the same warehouse (`raw/`, `curated/` separated logically).
-
-### Catalog Naming
-- **Catalog name**: `iceberg` (backed by AWS GlueCatalog).
-- **Namespaces**:
-  - `raw` → direct MongoDB extracts.
-  - `curated` → transformed, analytics-ready datasets.
-
-Example table identifiers:
-- `iceberg.raw.ecommerce_db_orders`
-- `iceberg.curated.sales_summary`
-
-### Glue / Iceberg Configuration
-- Use **GlueCatalog** for central schema management.
-- Set `spark.sql.catalog.iceberg.warehouse=s3://<bucket>/iceberg-warehouse/`.
-- Ensure AWS credentials and region are available (via env vars or IAM roles).
-- Include required AWS SDK v2 jars: `s3`, `glue`, `dynamodb`, `kms`.
-
----
 
 Example log during write:
   
@@ -310,91 +421,10 @@ Open Jupyter notebook (http://localhost:8888).
 Run SQL queries against Iceberg tables in S
 
 
-close_tasks_silver uses task_id or _id.
 
-journal_entries_silver uses (entry_id, account_id) as the logical key for dedupe & MERGE.
-
-journal_entries_gold uses entry_id.
-
-+------------------------+-------+--------------+-----------+-----------+----------+--------------------------+
-|_id                     |task_id|name          |assigned_to|status     |due_date  |ingest_ts                 |
-+------------------------+-------+--------------+-----------+-----------+----------+--------------------------+
-|68ca9b35193e5d257e046f25|T1     |Reconcile Cash|Alice      |Complete   |2025-06-05|2025-09-25 17:45:13.052109|
-|68ca9b35193e5d257e046f26|T2     |Review AP     |Bob        |In Progress|2025-06-06|2025-09-25 17:45:13.052109|
-+------------------------+-------+--------------+-----------+-----------+----------+--------------------------+
-
-+------------------------+--------+----------+--------------+----------+----------------+------------+-----+------+-------------------------+
-|_id                     |entry_id|entry_date|description   |account_id|account_name    |account_type|debit|credit|ingest_ts                |
-+------------------------+--------+----------+--------------+----------+----------------+------------+-----+------+-------------------------+
-|68ca9aca193e5d257e046f22|JE1001  |2025-05-31|Vendor payment|1000      |Cash            |Asset       |500.0|0.0   |2025-09-25 17:45:16.68436|
-|68ca9aca193e5d257e046f22|JE1001  |2025-05-31|Vendor payment|2000      |Accounts Payable|Liability   |0.0  |500.0 |2025-09-25 17:45:16.68436|
-+------------------------+--------+----------+--------------+----------+----------------+------------+-----+------+-------------------------+
-
-+--------+----------+------------+-----------+
-|entry_id|entry_date|total_credit|total_debit|
-+--------+----------+------------+-----------+
-|JE1001  |2025-05-31|500.0       |500.0      |
-+--------+----------+------------+-----------+
-
-
-+------------------------+--------+----------+--------------------------------+--------------+--------------------------+
-|_id                     |entry_id|date      |lines                           |description   |ingest_ts                 |
-+------------------------+--------+----------+--------------------------------+--------------+--------------------------+
-|68ca9aca193e5d257e046f22|JE1001  |2025-05-31|[{1000, 500, 0}, {2000, 0, 500}]|Vendor payment|2025-09-23 16:46:52.534674|
-+------------------------+--------+----------+--------------------------------+--------------+--------------------------+
-
-
-+------------------------+----------+----------------+---------+--------------------------+
-|_id                     |account_id|name            |type     |ingest_ts                 |
-+------------------------+----------+----------------+---------+--------------------------+
-|68ca9a71193e5d257e046f1c|1000      |Cash            |Asset    |2025-09-23 16:59:25.26308 |
-|68ca9a71193e5d257e046f1d|2000      |Accounts Payable|Liability|2025-09-23 16:59:25.26308 |
-+------------------------+----------+----------------+---------+--------------------------+
-
-
-
-+------------------------+-------+--------------+-----------+-----------+----------+--------------------------+
-|_id                     |task_id|name          |assigned_to|status     |due_date  |ingest_ts                 |
-+------------------------+-------+--------------+-----------+-----------+----------+--------------------------+
-|68ca9b35193e5d257e046f26|T2     |Review AP     |Bob        |In Progress|2025-06-06|2025-09-23 04:49:08.584766|
-|68ca9b35193e5d257e046f25|T1     |Reconcile Cash|Alice      |Complete   |2025-06-05|2025-09-23 04:49:08.584766|
-+------------------------+-------+--------------+-----------+-----------+----------+--------------------------+
-
-
-
-flowchart TD
-    A[MongoDB Atlas\n(ecommerce_db_raw)] -->|Extract via PyMongo| B[Raw Layer\nIceberg Tables (S3, Glue)]
-    
-    subgraph Raw Layer
-        B1[raw.fq_app_accounts]
-        B2[raw.fq_app_close_tasks]
-        B3[raw.fq_app_journal_entries]
-    end
-
-    B -->|Transform + Dedup + Flatten| C[Curated Layer\nSilver Tables]
-
-    subgraph Silver Layer
-        C1[curated.fq_app_close_tasks_silver]
-        C2[curated.fq_app_journal_entries_silver]
-    end
-
-    C -->|Aggregations & Metrics| D[Curated Layer\nGold Tables]
-
-    subgraph Gold Layer
-        D1[curated.fq_app_journal_entries_gold]
-    end
-
-    D -->|Query with Spark SQL, Athena, Databricks| E[Analytics / BI Tools]
 
 
 🔎 Explanation of Flow:
 
-MongoDB Atlas → source database with collections (accounts, close_tasks, journal_entries).
-
-Raw Layer → schema-preserving ingestion into Iceberg (S3 + Glue). Partitioned by ingest_ts.
-
-Silver Layer → cleaned, deduplicated data with flattened structures and business partitions (e.g., year(entry_date)).
-
-Gold Layer → aggregated metrics tables for analytics (e.g., debit/credit totals).
 
 Analytics Tools → Spark SQL, Athena, Quicksight, Databricks, etc. query curated datasets.
