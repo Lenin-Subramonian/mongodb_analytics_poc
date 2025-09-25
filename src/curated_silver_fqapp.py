@@ -124,15 +124,19 @@ def expire_snapshots_and_vacuum(spark: SparkSession, qualified_table: str,
 # -----------------------------------------------------------------------------
 # Create curated tables with DDL including properties
 # -----------------------------------------------------------------------------
+    # created_at TIMESTAMP,
+    # create_user STRING,
+    # updated_at TIMESTAMP,
+    # update_user STRING
+
 close_tasks_columns = """
     _id STRING,
     task_id STRING,
+    name STRING,
+    assigned_to STRING,
     status STRING,
-    created_at TIMESTAMP,
     due_date DATE,
-    ingest_ts TIMESTAMP,
-    year INT,
-    month INT
+    ingest_ts TIMESTAMP
     """
 
 journal_entries_silver_columns = """
@@ -141,23 +145,18 @@ journal_entries_silver_columns = """
     entry_date DATE,
     description STRING,
     account_id STRING,
-    debit DOUBLE,
-    credit DOUBLE,
-    ingest_ts TIMESTAMP,
     account_name STRING,
     account_type STRING,
-    year INT,
-    month INT
+    debit DOUBLE,
+    credit DOUBLE,
+    ingest_ts TIMESTAMP
     """
 
 journal_entries_gold_columns = """
     entry_id STRING,
     entry_date DATE,
     total_credit DOUBLE,
-    total_debit DOUBLE,
-    ingest_ts TIMESTAMP,
-    year INT,
-    month INT
+    total_debit DOUBLE
     """
 
 # -----------------------------------------------------------------------------
@@ -174,7 +173,7 @@ def create_curated_tables_fq_app(spark: SparkSession):
       {close_tasks_columns}
     )
     USING iceberg
-    PARTITIONED BY (years(due_date), months(due_date))
+    PARTITIONED BY (months(due_date))
     {build_properties_clause(TABLE_PROPERTIES)}
     """
     run_ddl(spark, ddl_close)
@@ -184,7 +183,7 @@ def create_curated_tables_fq_app(spark: SparkSession):
       {journal_entries_silver_columns}
     )
     USING iceberg
-    PARTITIONED BY (years(entry_date), months(entry_date))
+    PARTITIONED BY (months(entry_date))
     {build_properties_clause(TABLE_PROPERTIES)}
     """
     run_ddl(spark, ddl_journal_silver)
@@ -194,7 +193,7 @@ def create_curated_tables_fq_app(spark: SparkSession):
       {journal_entries_gold_columns}
     )
     USING iceberg
-    PARTITIONED BY (years(entry_date), months(entry_date))
+    PARTITIONED BY (years(entry_date))
     {build_properties_clause(TABLE_PROPERTIES)}
     """
     run_ddl(spark, ddl_journal_gold)
@@ -222,8 +221,7 @@ def build_and_write_curated(spark: SparkSession):
     # --- close tasks silver ---
     df_close_tasks = spark.table(raw_close) \
         .withColumn("due_date", to_date(col("due_date"))) \
-        .withColumn("ingest_ts", coalesce(col("ingest_ts"), current_timestamp())) \
-        .withColumn("year", year(col("due_date"))).withColumn("month", month(col("due_date")))
+        .withColumn("ingest_ts", coalesce(col("ingest_ts"), current_timestamp())) 
     w = Window.partitionBy("task_id").orderBy(col("ingest_ts").desc())
     df_close_dedup = df_close_tasks.withColumn("_rn", expr("row_number() over (partition by task_id order by ingest_ts desc)")).filter(col("_rn")==1).drop("_rn")
 
@@ -251,8 +249,7 @@ def build_and_write_curated(spark: SparkSession):
         col("_id"), col("entry_id"), col("entry_date"),
         col("description"), col("line.account_id").alias("account_id"),
         col("line.debit").alias("debit"), col("line.credit").alias("credit"),
-        col("ingest_ts")
-    ).withColumn("year", year(col("entry_date"))).withColumn("month", month(col("entry_date")))
+        col("ingest_ts") )
 
     df_joined = df_journal_lines.join(df_account.select("account_id", "name", "type"), on="account_id", how="left") \
         .withColumnRenamed("name", "account_name") \
@@ -276,9 +273,9 @@ def build_and_write_curated(spark: SparkSession):
     df_silver = spark.table(target_journal_silver)
     agg = df_silver.groupBy("entry_id", "entry_date").agg(
         expr("sum(coalesce(credit,0)) as total_credit"),
-        expr("sum(coalesce(debit,0)) as total_debit"),
-        expr("max(ingest_ts) as ingest_ts")
-    ).withColumn("year", year(col("entry_date"))).withColumn("month", month(col("entry_date")))
+        expr("sum(coalesce(debit,0)) as total_debit")
+        # expr("max(ingest_ts) as ingest_ts")
+        )
 
     target_gold = f"{GLUE_CATALOG}.{CURATED_NS}.{APP}_journal_entries_gold"
     agg.createOrReplaceTempView("_stg_journal_gold")
@@ -292,7 +289,19 @@ def build_and_write_curated(spark: SparkSession):
     spark.sql(merge_gold_sql)
     expire_snapshots_and_vacuum(spark, target_gold, older_than_days=90, retain_last=5)
 
-# ---------- main ----------
+# -----------------------------------------------------------------------------
+# run curated job entrypoint
+# -----------------------------------------------------------------------------
+def run_curated(spark: SparkSession):
+    """High-level function the runner or CLI calls."""
+    logger.info("Curated Silver JObs.")
+    create_namespace_if_missing(spark)
+    create_curated_tables_fq_app(spark)
+    build_and_write_curated(spark)
+    logger.info("Curated jobs finished.")
+# -----------------------------------------------------------------------------
+# Main entrypoint if run standalone
+# -----------------------------------------------------------------------------
 def main():
     spark = spark_session()
     try:

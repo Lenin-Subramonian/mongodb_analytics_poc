@@ -1,6 +1,9 @@
 # docker/Dockerfile - Using official Spark image
 FROM apache/spark:3.5.3-java17-python3
 
+# Use Databricks minimal runtime as the base image
+# FROM databricksruntime/minimal:15.4-LTS
+
 # Switch to root for installation, Only root can install packages & create directories
 USER root
 

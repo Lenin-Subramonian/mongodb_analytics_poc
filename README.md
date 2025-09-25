@@ -1,36 +1,86 @@
+# MongoDB → Iceberg Data Lakehouse Pipeline
+
+## Problem Statement
+
+Background:
+You are working for an accounting SaaS platform focused on automating and tracking the month-end close process, journal entries, and account reconciliations. Your team uses MongoDB as the primary data store for accounting records, workflow tasks, and audit trails.
+Objective:
 Build an end-to-end pipeline that:
 1. Extracts accounting data from MongoDB
 2. Writes to S3 in Apache Iceberg format
 3. Transforms it for analytical use
 4. Enables analysis via a query engine
 
-
-# IFCO Data Application
-## Problem Statement
-
-  To assist IFCO's Data Team in the analysis of some business data. For this purpose, you have been provided with two files:
-  1. orders.csv (which contains facmtual information regarding the orders received)
-  2. invoicing_data.json (which contains invoicing information)
-    
-  For this exercise, you can only use Python, PySpark or SQL (e.g. in dbt). Unit testing is essential for ensuring the reliability and correctness of your code. 
-  Please include appropriate unit tests for each task.
-
 ## Highlevel Solution & Approach
-  1. **Data Infrastructure**
+
+# MongoDB to Apache Iceberg POC (AWS Glue / Databricks)
+
+
+
+This proof-of-concept (POC) demonstrates an end-to-end data pipeline that ingests raw data from MongoDB Atlas into Apache Iceberg tables (stored on S3, cataloged with AWS Glue), and builds curated (silver/gold) datasets for downstream analytics.
+
+The solution uses PySpark (3.5.3), the Iceberg Spark runtime, and runs inside Docker containers orchestrated with Docker Compose.
+
+🏗️ **Architecture**
+
+
+**Data Architecture**
+
+## Overview
+
+This proof-of-concept (POC) demonstrates how to build a **data ingestion and analytics pipeline** where:
+
+1. **Source**: Data is extracted from a MongoDB database (`ecommerce_db_raw`) with collections:
+   - `orders`
+   - `customers`
+   - `products`
+2. **Transformation**: Data is ingested into **Apache Iceberg tables** using **PySpark 3.5.3**.
+3. **Storage**: Data is persisted in **Amazon S3** in Iceberg format (Parquet data files + metadata).
+4. **Catalog**: AWS Glue Catalog (or Databricks Unity Catalog in enterprise setup) manages table and schema definitions.
+
+This approach allows for:
+- **Separation of concerns**: `raw` vs `curated` layers in the Iceberg warehouse.
+- **Schema evolution**: Iceberg handles column addition/removal.
+- **Time travel queries**: Analyze data at historical snapshots.
+- **Decoupled compute/storage**: Data in S3 is accessible to multiple engines (Spark, Trino, Athena, Databricks).
+
+ 1. **Data Infrastructure**
         - Setup databricks runtime as the base image to process data using PySpark, Python and SQL.
         - Use Jupyter Notebook and Streamlit for visualization.
         - Python and Java environment
         - Supervisor for process management
-  2. **Data Ingestion**.
-     -  Ingest orders data (CSV) into a dataframe.Clean the source data for ingestion such as removing special characters etc. 
-     -  Ingest invoices data (JSON) into a data frame, and create a view, invoices.
-     -  Create base views `orders` and `Invoices`
-  3. **Data Transform**
-     - Transform the data, apply data validation rules and create views for reuse.  
-       - `ORDERS_VW` - Create base view with business rules. 
-       - `SALESOWNERS_VW` - Create a de-normalized view of sales owners.
-       - `SALES_OWNER_COMMISSION_VW` - Create a salesowners commission View
-       - `ORDER_SALES_OWNER_VW` - Create a de-normalised view of order and sales owners - a record per order & sales owner.
+
+    **AWS Glue Catalog**
+
+      Provides a central metadata store.
+
+      Enables external tools (e.g., Athena, Spark SQL, Databricks) to query Iceberg tables.
+
+     **Storage**
+
+
+
+      **tooling**
+
+      **Data Sources & Target**
+
+**Data Procesing**
+
+ 
+  2. **Data Ingestion** - Raw Ingestion Layer
+     -  Extracts collections (e.g., accounts, close_tasks, journal_entries) from MongoDB. 
+     -  Writes directly into S3 in Iceberg format (raw namespace).
+     -  Schema in this layer matches MongoDB exactly, preserving source fidelity.
+
+
+  3. **Data Transform** - Curated Layer (Silver / Gold)
+
+      Transforms raw data into analytics-ready datasets:
+      Silver: Deduplicated, cleaned, with schema evolution applied (e.g., date parsing, flattening nested structures).
+      Gold: Aggregated metrics (e.g., journal entry debit/credit totals).
+      Uses MERGE INTO for CDC / idempotent updates.
+      Partitioned by business keys such as entry_date (year).
+
   5. **Data Analytics**
      - Generate datasets for each use case using the above views.
     
@@ -50,21 +100,80 @@ Build an end-to-end pipeline that:
         - Set PYTHONPATH=$(pwd)/src:$PYTHONPATH (to execute the /src files. 
       
       **Core dependencies**
-        - pandas
-        - pyspark
-        - urllib3
-        - streamlit
-          
-      **Jupyter dependencies**
-        - notebook
-        - jupyterlab
-        - ipykernel
-        - ipywidgets
-        - matplotlib
-      
-      **Additional dependencies**
-        - requests
+        pyspark==3.5.3
+        pymongo==4.8.0
+        boto3==1.34.144
+        pandas==2.1.4
+        python-dotenv==1.0.1
+        requests==2.31.0
+        numpy==1.24.4
+        seaborn==0.13.0
+        py4j==0.10.9.7
 
+       # Jupyter dependencies
+        jupyter==1.0.0
+        jupyterlab==4.0.9
+        ipykernel==6.29.0
+        ipywidgets
+        matplotlib==3.8.2
+        plotly==5.17.0
+
+  ### 2. Docker Compose
+
+- **mongodb-iceberg-etl**: Runs ETL job (Spark + Iceberg + AWS SDK jars).
+- **jupyter**: Interactive analysis, allows queries like:
+  ```python
+  spark.sql("SHOW CREATE TABLE iceberg.raw.ecommerce_db_orders").show(truncate=False)
+
+
+Running Locally (with Docker Compose)
+
+Configure environment variables in .env:
+
+AWS_ACCESS_KEY_ID=xxxx
+AWS_SECRET_ACCESS_KEY=xxxx
+AWS_REGION=us-east-1
+MONGO_URI=mongodb+srv://...
+S3_BUCKET=fq-app-analytics-bucket-1
+
+  ## Components
+
+### 1. PySpark ETL Script (`mongodb_to_iceberg_etl.py`)
+
+- Extracts MongoDB collections using `pymongo`.
+- Converts documents to Spark DataFrames.
+- Writes DataFrames to Iceberg tables (`CREATE TABLE IF NOT EXISTS ...`).
+- Partitions data where appropriate (e.g., `orders` by `order_date`).
+
+## Best Practices
+
+### Data Layout
+- **Warehouse root**: `s3://<bucket>/iceberg-warehouse/`
+- **Raw layer**: `s3://<bucket>/iceberg-warehouse/raw/<app_name>/<collection>`
+- **Curated layer**: `s3://<bucket>/iceberg-warehouse/curated/<app_name>/<table>`
+
+This ensures multiple apps can share the same warehouse (`raw/`, `curated/` separated logically).
+
+### Catalog Naming
+- **Catalog name**: `iceberg` (backed by AWS GlueCatalog).
+- **Namespaces**:
+  - `raw` → direct MongoDB extracts.
+  - `curated` → transformed, analytics-ready datasets.
+
+Example table identifiers:
+- `iceberg.raw.ecommerce_db_orders`
+- `iceberg.curated.sales_summary`
+
+### Glue / Iceberg Configuration
+- Use **GlueCatalog** for central schema management.
+- Set `spark.sql.catalog.iceberg.warehouse=s3://<bucket>/iceberg-warehouse/`.
+- Ensure AWS credentials and region are available (via env vars or IAM roles).
+- Include required AWS SDK v2 jars: `s3`, `glue`, `dynamodb`, `kms`.
+
+---
+
+Example log during write:
+  
   ## How to install & Execute
 
   ### *Using Docker Image from Registry*
@@ -182,174 +291,6 @@ Dependencies: Installs Python packages and downloads JAR files
 Security: Creates non-root user for running applications
 Health Check: Monitors Spark UI for container health
 
-# High-level architecture & goals -->
-
-Goal: reliably land raw JSON-like MongoDB collections (orders, customers, products) into S3 as Iceberg tables (transactional, schema-evolving), keep a raw immutable zone, and build derived/processed tables for analytics.
-
-Components:
-
-Extractor: PySpark job (Spark 3.5.3) that reads from MongoDB (either via pymongo or MongoDB Spark Connector) and writes Iceberg tables to S3.
-
-Data lake storage: S3 buckets, Iceberg-managed table directories.
-
-Catalog: either AWS Glue Data Catalog (GlueCatalog) or Databricks Unity Catalog — both register table metadata for query engines.
-
-Query engines: Spark (on EMR/Glue/Databricks), Trino/Presto, Athena (with Iceberg support), Redshift Spectrum (if needed). For this POC focus on Spark and Glue/Databricks. Iceberg runtime jar is required.
-
-High-level flow:
-
-Extract raw documents from MongoDB ecommerce_db_raw collections into a Spark DataFrame (structs/arrays handled).
-
-Write to S3 as Iceberg-managed table in a raw namespace (immutable append-only ingestion).
-
-Later runs can write incremental changes or create processed/analytics tables (CTAS, MERGE INTO) from the raw iceberg tables.
-
-
-S3 directory mapping (best practice)
-
-Map logical namespace → S3 prefix under the warehouse root:
-
-s3://fq-app-analytics-bucket-1/iceberg-warehouse/
-  ├─ raw/
-  │   └─ fq_app/
-  │       ├─ orders/         <-- iceberg table location
-  │       ├─ customers/
-  │       └─ products/
-  ├─ curated/
-  │   └─ fq_app/
-  │       ├─ orders_silver/
-  │       └─ customers_silver/
-  └─ shared/                 # cross-app shared datasets
-
-
-Why: keeping raw/curated at top-level simplifies lifecycle policies (e.g., retention on raw snapshots vs curated), IAM prefixes, and Glue database/table listing.
-
-able naming examples
-
-Raw tables (append-only, immutable):
-
-iceberg.raw.fq_app_orders → physical dir .../raw/fq_app/orders/
-
-iceberg.raw.fq_app_customers
-
-Curated tables (cleaned/enriched):
-
-iceberg.curated.fq_app_orders_v1 or iceberg.curated.fq_app_orders_silver
-
-Shared datasets:
-
-iceberg.curated.shared.dim_products
-
-Recommended final PACKAGES for Glue (copy/paste)
-org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.2,
-org.apache.hadoop:hadoop-aws:3.3.6,
-software.amazon.awssdk:glue:2.20.137,
-software.amazon.awssdk:s3:2.20.137,
-software.amazon.awssdk:sts:2.20.137,
-software.amazon.awssdk:dynamodb:2.20.137,
-software.amazon.awssdk:kms:2.20.137,
-org.mongodb.spark:mongo-spark-connector_2.12:10.3.0
-
-
-s3://fq-app-analytics-bucket-1/iceberg-warehouse/raw.db/ecommerce_db_orders/
-
-
-s3://fq-app-analytics-bucket-1/iceberg-warehouse/
-  raw.db/                        # Hive-style folder for 'raw' database
-    fq_app_orders/               # table directory for fq_app orders
-    fq_app_customers/
-  curated.db/
-    fq_app_orders_silver/
-    otherapp_orders_silver/
-
-
-# MongoDB to Apache Iceberg POC (AWS Glue / Databricks)
-
-## Overview
-
-This proof-of-concept (POC) demonstrates how to build a **data ingestion and analytics pipeline** where:
-
-1. **Source**: Data is extracted from a MongoDB database (`ecommerce_db_raw`) with collections:
-   - `orders`
-   - `customers`
-   - `products`
-2. **Transformation**: Data is ingested into **Apache Iceberg tables** using **PySpark 3.5.3**.
-3. **Storage**: Data is persisted in **Amazon S3** in Iceberg format (Parquet data files + metadata).
-4. **Catalog**: AWS Glue Catalog (or Databricks Unity Catalog in enterprise setup) manages table and schema definitions.
-
-This approach allows for:
-- **Separation of concerns**: `raw` vs `curated` layers in the Iceberg warehouse.
-- **Schema evolution**: Iceberg handles column addition/removal.
-- **Time travel queries**: Analyze data at historical snapshots.
-- **Decoupled compute/storage**: Data in S3 is accessible to multiple engines (Spark, Trino, Athena, Databricks).
-
----
-
-## Architecture
-
-
-
-
----
-
-## Best Practices
-
-### Data Layout
-- **Warehouse root**: `s3://<bucket>/iceberg-warehouse/`
-- **Raw layer**: `s3://<bucket>/iceberg-warehouse/raw/<app_name>/<collection>`
-- **Curated layer**: `s3://<bucket>/iceberg-warehouse/curated/<app_name>/<table>`
-
-This ensures multiple apps can share the same warehouse (`raw/`, `curated/` separated logically).
-
-### Catalog Naming
-- **Catalog name**: `iceberg` (backed by AWS GlueCatalog).
-- **Namespaces**:
-  - `raw` → direct MongoDB extracts.
-  - `curated` → transformed, analytics-ready datasets.
-
-Example table identifiers:
-- `iceberg.raw.ecommerce_db_orders`
-- `iceberg.curated.sales_summary`
-
-### Glue / Iceberg Configuration
-- Use **GlueCatalog** for central schema management.
-- Set `spark.sql.catalog.iceberg.warehouse=s3://<bucket>/iceberg-warehouse/`.
-- Ensure AWS credentials and region are available (via env vars or IAM roles).
-- Include required AWS SDK v2 jars: `s3`, `glue`, `dynamodb`, `kms`.
-
----
-
-## Components
-
-### 1. PySpark ETL Script (`mongodb_to_iceberg_etl.py`)
-
-- Extracts MongoDB collections using `pymongo`.
-- Converts documents to Spark DataFrames.
-- Writes DataFrames to Iceberg tables (`CREATE TABLE IF NOT EXISTS ...`).
-- Partitions data where appropriate (e.g., `orders` by `order_date`).
-
-Example log during write:
-
-
-
-### 2. Docker Compose
-
-- **mongodb-iceberg-etl**: Runs ETL job (Spark + Iceberg + AWS SDK jars).
-- **jupyter**: Interactive analysis, allows queries like:
-  ```python
-  spark.sql("SHOW CREATE TABLE iceberg.raw.ecommerce_db_orders").show(truncate=False)
-
-
-Running Locally (with Docker Compose)
-
-Configure environment variables in .env:
-
-AWS_ACCESS_KEY_ID=xxxx
-AWS_SECRET_ACCESS_KEY=xxxx
-AWS_REGION=us-east-1
-MONGO_URI=mongodb+srv://...
-S3_BUCKET=fq-app-analytics-bucket-1
-
 
 Build and run:
 
@@ -367,3 +308,93 @@ Explore with Jupyter:
 Open Jupyter notebook (http://localhost:8888).
 
 Run SQL queries against Iceberg tables in S
+
+
+close_tasks_silver uses task_id or _id.
+
+journal_entries_silver uses (entry_id, account_id) as the logical key for dedupe & MERGE.
+
+journal_entries_gold uses entry_id.
+
++------------------------+-------+--------------+-----------+-----------+----------+--------------------------+
+|_id                     |task_id|name          |assigned_to|status     |due_date  |ingest_ts                 |
++------------------------+-------+--------------+-----------+-----------+----------+--------------------------+
+|68ca9b35193e5d257e046f25|T1     |Reconcile Cash|Alice      |Complete   |2025-06-05|2025-09-25 17:45:13.052109|
+|68ca9b35193e5d257e046f26|T2     |Review AP     |Bob        |In Progress|2025-06-06|2025-09-25 17:45:13.052109|
++------------------------+-------+--------------+-----------+-----------+----------+--------------------------+
+
++------------------------+--------+----------+--------------+----------+----------------+------------+-----+------+-------------------------+
+|_id                     |entry_id|entry_date|description   |account_id|account_name    |account_type|debit|credit|ingest_ts                |
++------------------------+--------+----------+--------------+----------+----------------+------------+-----+------+-------------------------+
+|68ca9aca193e5d257e046f22|JE1001  |2025-05-31|Vendor payment|1000      |Cash            |Asset       |500.0|0.0   |2025-09-25 17:45:16.68436|
+|68ca9aca193e5d257e046f22|JE1001  |2025-05-31|Vendor payment|2000      |Accounts Payable|Liability   |0.0  |500.0 |2025-09-25 17:45:16.68436|
++------------------------+--------+----------+--------------+----------+----------------+------------+-----+------+-------------------------+
+
++--------+----------+------------+-----------+
+|entry_id|entry_date|total_credit|total_debit|
++--------+----------+------------+-----------+
+|JE1001  |2025-05-31|500.0       |500.0      |
++--------+----------+------------+-----------+
+
+
++------------------------+--------+----------+--------------------------------+--------------+--------------------------+
+|_id                     |entry_id|date      |lines                           |description   |ingest_ts                 |
++------------------------+--------+----------+--------------------------------+--------------+--------------------------+
+|68ca9aca193e5d257e046f22|JE1001  |2025-05-31|[{1000, 500, 0}, {2000, 0, 500}]|Vendor payment|2025-09-23 16:46:52.534674|
++------------------------+--------+----------+--------------------------------+--------------+--------------------------+
+
+
++------------------------+----------+----------------+---------+--------------------------+
+|_id                     |account_id|name            |type     |ingest_ts                 |
++------------------------+----------+----------------+---------+--------------------------+
+|68ca9a71193e5d257e046f1c|1000      |Cash            |Asset    |2025-09-23 16:59:25.26308 |
+|68ca9a71193e5d257e046f1d|2000      |Accounts Payable|Liability|2025-09-23 16:59:25.26308 |
++------------------------+----------+----------------+---------+--------------------------+
+
+
+
++------------------------+-------+--------------+-----------+-----------+----------+--------------------------+
+|_id                     |task_id|name          |assigned_to|status     |due_date  |ingest_ts                 |
++------------------------+-------+--------------+-----------+-----------+----------+--------------------------+
+|68ca9b35193e5d257e046f26|T2     |Review AP     |Bob        |In Progress|2025-06-06|2025-09-23 04:49:08.584766|
+|68ca9b35193e5d257e046f25|T1     |Reconcile Cash|Alice      |Complete   |2025-06-05|2025-09-23 04:49:08.584766|
++------------------------+-------+--------------+-----------+-----------+----------+--------------------------+
+
+
+
+flowchart TD
+    A[MongoDB Atlas\n(ecommerce_db_raw)] -->|Extract via PyMongo| B[Raw Layer\nIceberg Tables (S3, Glue)]
+    
+    subgraph Raw Layer
+        B1[raw.fq_app_accounts]
+        B2[raw.fq_app_close_tasks]
+        B3[raw.fq_app_journal_entries]
+    end
+
+    B -->|Transform + Dedup + Flatten| C[Curated Layer\nSilver Tables]
+
+    subgraph Silver Layer
+        C1[curated.fq_app_close_tasks_silver]
+        C2[curated.fq_app_journal_entries_silver]
+    end
+
+    C -->|Aggregations & Metrics| D[Curated Layer\nGold Tables]
+
+    subgraph Gold Layer
+        D1[curated.fq_app_journal_entries_gold]
+    end
+
+    D -->|Query with Spark SQL, Athena, Databricks| E[Analytics / BI Tools]
+
+
+🔎 Explanation of Flow:
+
+MongoDB Atlas → source database with collections (accounts, close_tasks, journal_entries).
+
+Raw Layer → schema-preserving ingestion into Iceberg (S3 + Glue). Partitioned by ingest_ts.
+
+Silver Layer → cleaned, deduplicated data with flattened structures and business partitions (e.g., year(entry_date)).
+
+Gold Layer → aggregated metrics tables for analytics (e.g., debit/credit totals).
+
+Analytics Tools → Spark SQL, Athena, Quicksight, Databricks, etc. query curated datasets.

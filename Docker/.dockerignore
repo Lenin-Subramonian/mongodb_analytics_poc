@@ -14,7 +14,8 @@ __pycache__/
 .pytest_cache/
 .coverage
 .Databricks
-.OLD
+*.OLD
+*.pyOLD
 *.log
 logs/
 data/
