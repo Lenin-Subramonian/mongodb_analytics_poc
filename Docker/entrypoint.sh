@@ -36,10 +36,10 @@ SPARK_OPTS=(
 )
 
 
-echo "Running spark-submit with: ${SPARK_OPTS[*]} /app/src/runner_mongo_ingestion.py"
+echo "Running spark-submit with: ${SPARK_OPTS[*]} /app/src/mongo_ingestion_runner.py"
 
 # Exec the job (replace current PID 1)
-exec /opt/spark/bin/spark-submit "${SPARK_OPTS[@]}" /app/src/runner_mongo_ingestion.py
+exec /opt/spark/bin/spark-submit "${SPARK_OPTS[@]}" /app/src/mongo_ingestion_runner.py
 
 # entrypoint - prevents --packages from being added when PACKAGES is empty or malformed.
 # It strips newlines and excessive whitespace.

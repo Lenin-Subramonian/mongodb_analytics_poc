@@ -67,4 +67,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # Run via spark-submit (no --packages needed, jars already in classpath)
 CMD [ "bash", "-c", "/opt/spark/bin/spark-submit --master local[*] \
   --conf spark.driver.memory=1g --conf spark.executor.memory=1g \
-  /app/src/runner_mongo_ingestion.py" ]
+  /app/src/mongo_ingestion_runner.py" ]

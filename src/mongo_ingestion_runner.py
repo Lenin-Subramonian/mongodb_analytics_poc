@@ -9,7 +9,10 @@ from importlib import import_module
 logger = logging.getLogger("runner_ingestion")
 logging.basicConfig(level=os.environ.get("LOG_LEVEL","INFO"))
 
-# Retry utility
+
+# -----------------------------------------------------------------------------
+# Helper - Retry utility
+# -----------------------------------------------------------------------------
 def retry(func, retries=3, base_delay=5, backoff=2, *args, **kwargs):
     last_exc = None
     delay = base_delay
@@ -27,6 +30,9 @@ def retry(func, retries=3, base_delay=5, backoff=2, *args, **kwargs):
                 logger.error("All %d attempts failed.", retries)
     raise last_exc
 
+# -----------------------------------------------------------------------------
+# Spark session builder with Iceberg and AWS Glue Catalog
+# -----------------------------------------------------------------------------
 def create_spark():
     # Important: packages should be provided by spark-submit --packages OR baked into image.
     catalog = os.environ.get("GLUE_CATALOG_NAME", "iceberg")
@@ -46,6 +52,9 @@ def create_spark():
     spark = builder.getOrCreate()
     return spark
 
+# -----------------------------------------------------------------------------
+# Main ETL runner for MongoDB to Iceberg Ingestion & curated silver/gold tables
+# -----------------------------------------------------------------------------
 def main():
     exit_code = 0
     spark = None
@@ -54,14 +63,13 @@ def main():
 
         # import jobs
         mongo_job = import_module("mongodb_iceberg_fqapp")
-        curated_job = import_module("curated_silver")
+        curated_job = import_module("curated_silver_fqapp")
 
         # 1 - Run mongo extraction with retries (transient network issues)
         run_curated_flag = os.environ.get("RUN_CURATED", "true").lower() in ("1","true","yes")
-        run_curated_flag = False  # for now, always run curated step
 
         logger.info("Starting mongo ETL step")
-        retry(lambda: mongo_job.run_etl(spark), retries=int(os.environ.get("ETL_RETRIES", "3")), base_delay=5)
+        retry(lambda: mongo_job.data_ingestion(spark), retries=int(os.environ.get("ETL_RETRIES", "3")), base_delay=5)
 
         # 2 - Run curated job (optionally)
         if run_curated_flag:
