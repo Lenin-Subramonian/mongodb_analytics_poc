@@ -440,7 +440,9 @@ Other Query Engines considered:
       
    6. Create purpose built dimension data models such as facts and dimensions or denormalised tables for better query and report performance. Use data visulization tool such as Tableau for more dashboard capabilities as data is persisted in database.
       
-   7. Production / Operational / Security considerations
+   7. Orchestration using Airflow and Dbt
+      
+   9. Production / Operational / Security considerations
          -   Use IAM roles (EC2/ECS/EKS) rather than long-lived keys
          -   Use partitioned Iceberg tables (e.g., days(date) or ingest_date) — demonstrated in comments,
          -   Use Glue Data Catalog config, KMS configs, and a robust retry/recovery pattern
@@ -470,6 +472,7 @@ B. Catalog configuration examples - Spark config (PySpark example building Spark
         .config("spark.sql.catalog.glue_catalog.cache-enabled", "true") \
         .config("spark.hadoop.fs.s3a.endpoint", "<s3-endpoint-if-minio>") \
         .getOrCreate()
+
 
 
 
