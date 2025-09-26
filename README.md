@@ -358,12 +358,31 @@ Other Query Engines considered:
    
    Configure environment variables in .env:
    
-         AWS_ACCESS_KEY_ID=xxxx
-         AWS_SECRET_ACCESS_KEY=xxxx
-         AWS_REGION=us-east-1
-         MONGO_URI="mongodb+srv://..."
-         APP_NAME="fq_app"
-         S3_WAREHOUSE="s3a://fq-app-analytics-bucket-1/iceberg-warehouse"
+		# Mongo Config
+		MONGO_URI=mongodb+srv://ls_db_user:s47tBnWikllAoe3k@democluster0.j777gry.mongodb.net/
+		MONGODB_ATLAS_USERNAME=ls_db_user
+		MONGODB_ATLAS_PASSWORD=s47tBnWikllAoe3k
+		MONGODB_ATLAS_CLUSTER=democluster0.j777gry.mongodb.net
+		MONGODB_DATABASE=fq_app
+		RAW_NAMESPACE=raw_data
+		CURATED_NAMESPACE=curated
+		
+		# # AWS Configuration
+		AWS_ACCESS_KEY_ID=xxxx
+		AWS_SECRET_ACCESS_KEY=xxxx
+		AWS_DEFAULT_REGION=us-east-2
+		S3_BUCKET=fq-app-analytics-bucket-1
+		GLUE_CATALOG_NAME=iceberg
+		
+		# Application Configuration
+		LOG_LEVEL=INFO
+		BATCH_SIZE=1000
+		SPARK_DRIVER_MEMORY=2g
+		SPARK_EXECUTOR_MEMORY=4g
+		SPARK_EXECUTOR_CORES=2
+		
+		# Jupyter Configuration
+		JUPYTER_TOKEN=xxxx
 
    2. Start Docker Stack
 
@@ -451,6 +470,7 @@ B. Catalog configuration examples - Spark config (PySpark example building Spark
         .config("spark.sql.catalog.glue_catalog.cache-enabled", "true") \
         .config("spark.hadoop.fs.s3a.endpoint", "<s3-endpoint-if-minio>") \
         .getOrCreate()
+
 
 
 
