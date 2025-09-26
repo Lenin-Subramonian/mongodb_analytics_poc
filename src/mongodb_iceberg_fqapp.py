@@ -401,11 +401,10 @@ def fetch_from_mongo_in_batches(mongo_uri: str, db_name: str, collection_name: s
 #     # otherwise, rely on writer.create() in caller
 #     return
 
-from pyspark.sql import SparkSession
-
+# -----------------------------------------------------------------------------
 # Assumes SparkSession is already initialized as per the previous discussion
 # with the correct Glue Catalog configuration
-
+# -----------------------------------------------------------------------------
 def perform_clean_run(spark, table_name ):
     """
     Performs a clean-up of the target Iceberg table by dropping and purging
@@ -568,7 +567,9 @@ def create_spark_session(app_name="mongo-to-iceberg-ingestion"):
     # .config("spark.sql.catalog.iceberg.warehouse", "s3a://fq-app-analytics-bucket-1/iceberg-warehouse/") \
     # .getOrCreate()
 
-
+# -----------------------------------------------------------------------------
+# main if run standalone
+# -----------------------------------------------------------------------------
 def main():
     # entrypoint if run standalone
     spark = None

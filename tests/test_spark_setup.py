@@ -11,23 +11,23 @@ def test_hadoop_windows_setup():
     # Check if files exist
     spark_home = os.getenv('SPARK_HOME')
     if not spark_home:
-        print("❌ SPARK_HOME not set")
+        print("SPARK_HOME not set")
         return
     
     hadoop_home = os.getenv('HADOOP_HOME')
     if not hadoop_home:
-        print("❌ HADOOP_HOME not set")
+        print(" HADOOP_HOME not set")
         return
     
     winutils_path = os.path.join(hadoop_home, 'bin', 'winutils.exe')
     hadoop_dll_path = os.path.join(spark_home, 'bin', 'hadoop.dll')
     
     print(f"SPARK_HOME: {spark_home}")
-    print(f"winutils.exe: {'✓' if os.path.exists(winutils_path) else '❌'} {winutils_path}")
-    print(f"hadoop.dll: {'✓' if os.path.exists(hadoop_dll_path) else '❌'} {hadoop_dll_path}")
+    print(f"winutils.exe: {'✓' if os.path.exists(winutils_path) else '**'} {winutils_path}")
+    print(f"hadoop.dll: {'✓' if os.path.exists(hadoop_dll_path) else '**'} {hadoop_dll_path}")
     
     if not os.path.exists(winutils_path):
-        print("❌ winutils.exe not found! Download it first.")
+        print(" winutils.exe not found! Download it first.")
         return
     
     # Test Spark with file operations
@@ -51,7 +51,7 @@ def test_hadoop_windows_setup():
         
         # Test simple operations (no file I/O initially)
         result = df.count()
-        print(f"✓ DataFrame operations work: {result} records")
+        print(f"DataFrame operations work: {result} records")
 
         
         # Test writing with proper path format
@@ -59,17 +59,13 @@ def test_hadoop_windows_setup():
         df.coalesce(1).write.mode("overwrite").option("header", "true").csv(output_path)
         
         print("✓ File write operation successful")
-        
-        # # Clean up
-        # import shutil
-        # if os.path.exists(temp_path):
-        #     shutil.rmtree(temp_path)
+    
         
         spark.stop()
-        print("✅ All tests passed!")
+        print("All tests passed!")
         
     except Exception as e:
-        print(f"❌ Test failed: {e}")
+        print(f"Test failed: {e}")
         import traceback
         traceback.print_exc()
 
